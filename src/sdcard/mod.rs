@@ -164,7 +164,7 @@ where
     ///
     /// This will trigger card (re-)initialisation.
     fn read(
-        &self,
+        &mut self,
         blocks: &mut [Block],
         start_block_idx: BlockIdx,
         _reason: &str,
@@ -183,7 +183,7 @@ where
     /// Write one or more blocks, starting at the given block index.
     ///
     /// This will trigger card (re-)initialisation.
-    fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+    fn write(&mut self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
         let mut inner = self.inner.borrow_mut();
         debug!("Writing {} blocks @ {}", blocks.len(), start_block_idx.0);
         inner.check_init()?;

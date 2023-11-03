@@ -85,7 +85,7 @@ where
     type Error = Error;
 
     fn read(
-        &self,
+        &mut self,
         blocks: &mut [Block],
         start_block_idx: BlockIdx,
         _reason: &str,
@@ -107,7 +107,7 @@ where
         Ok(())
     }
 
-    fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+    fn write(&mut self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
         let mut borrow = self.contents.borrow_mut();
         let contents: &mut [u8] = borrow.as_mut();
         let mut block_idx = start_block_idx;

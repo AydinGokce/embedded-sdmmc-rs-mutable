@@ -186,7 +186,7 @@ where
             | PARTITION_ID_FAT32_LBA
             | PARTITION_ID_FAT16_LBA
             | PARTITION_ID_FAT16 => {
-                let volume = fat::parse_volume(&self.block_device, lba_start, num_blocks)?;
+                let volume = fat::parse_volume(&mut self.block_device, lba_start, num_blocks)?;
                 let id = RawVolume(self.id_generator.get());
                 let info = VolumeInfo {
                     volume_id: id,
@@ -250,7 +250,7 @@ where
         let parent_dir_info = &self.open_dirs[parent_dir_idx];
         let dir_entry = match &self.open_volumes[volume_idx].volume_type {
             VolumeType::Fat(fat) => {
-                fat.find_directory_entry(&self.block_device, parent_dir_info, &short_file_name)?
+                fat.find_directory_entry(&mut self.block_device, parent_dir_info, &short_file_name)?
             }
         };
 
@@ -332,7 +332,7 @@ where
         match &self.open_volumes[volume_idx].volume_type {
             VolumeType::Fat(fat) => {
                 let sfn = name.to_short_filename().map_err(Error::FilenameError)?;
-                fat.find_directory_entry(&self.block_device, &self.open_dirs[directory_idx], &sfn)
+                fat.find_directory_entry(&mut self.block_device, &self.open_dirs[directory_idx], &sfn)
             }
         }
     }
@@ -350,7 +350,7 @@ where
         let volume_idx = self.get_volume_by_id(self.open_dirs[directory_idx].volume_id)?;
         match &self.open_volumes[volume_idx].volume_type {
             VolumeType::Fat(fat) => {
-                fat.iterate_dir(&self.block_device, &self.open_dirs[directory_idx], func)
+                fat.iterate_dir(&mut self.block_device, &self.open_dirs[directory_idx], func)
             }
         }
     }
@@ -425,7 +425,7 @@ where
                 let volume_idx = self.get_volume_by_id(volume)?;
                 match &mut self.open_volumes[volume_idx].volume_type {
                     VolumeType::Fat(fat) => {
-                        fat.truncate_cluster_chain(&self.block_device, file.entry.cluster)?
+                        fat.truncate_cluster_chain(&mut self.block_device, file.entry.cluster)?
                     }
                 };
                 file.update_length(0);
@@ -474,7 +474,7 @@ where
 
         let dir_entry = match &volume_info.volume_type {
             VolumeType::Fat(fat) => {
-                fat.find_directory_entry(&self.block_device, directory_info, &sfn)
+                fat.find_directory_entry(&mut self.block_device, directory_info, &sfn)
             }
         };
 
@@ -516,7 +516,7 @@ where
                 let volume_idx = self.get_volume_by_id(volume_id)?;
                 let entry = match &mut self.open_volumes[volume_idx].volume_type {
                     VolumeType::Fat(fat) => fat.write_new_directory_entry(
-                        &self.block_device,
+                        &mut self.block_device,
                         &self.time_source,
                         directory_info,
                         sfn,
@@ -567,7 +567,7 @@ where
         let sfn = name.to_short_filename().map_err(Error::FilenameError)?;
 
         let dir_entry = match &self.open_volumes[volume_idx].volume_type {
-            VolumeType::Fat(fat) => fat.find_directory_entry(&self.block_device, dir_info, &sfn),
+            VolumeType::Fat(fat) => fat.find_directory_entry(&mut self.block_device, dir_info, &sfn),
         }?;
 
         if dir_entry.attributes.is_directory() {
@@ -581,7 +581,7 @@ where
         let volume_idx = self.get_volume_by_id(dir_info.volume_id)?;
         match &self.open_volumes[volume_idx].volume_type {
             VolumeType::Fat(fat) => {
-                fat.delete_directory_entry(&self.block_device, dir_info, &sfn)?
+                fat.delete_directory_entry(&mut self.block_device, dir_info, &sfn)?
             }
         }
 
@@ -664,7 +664,7 @@ where
             self.open_files[file_idx].entry.cluster =
                 match self.open_volumes[volume_idx].volume_type {
                     VolumeType::Fat(ref mut fat) => {
-                        fat.alloc_cluster(&self.block_device, None, false)?
+                        fat.alloc_cluster(&mut self.block_device, None, false)?
                     }
                 };
             debug!(
@@ -709,7 +709,7 @@ where
                             VolumeType::Fat(ref mut fat) => {
                                 if fat
                                     .alloc_cluster(
-                                        &self.block_device,
+                                        &mut self.block_device,
                                         Some(current_cluster.1),
                                         false,
                                     )
@@ -768,22 +768,33 @@ where
 
     /// Close a file with the given full path.
     pub fn close_file(&mut self, file: RawFile) -> Result<(), Error<D::Error>> {
+        // Find the index and determine if the file is dirty in one pass.
+        // We do not hold onto a reference here to avoid borrowing issues.
         let mut found_idx = None;
+        let mut is_dirty = false;
         for (idx, info) in self.open_files.iter().enumerate() {
             if file == info.file_id {
-                found_idx = Some((info, idx));
+                found_idx = Some(idx);
+                is_dirty = info.dirty;
                 break;
             }
         }
-
-        let (file_info, file_idx) = found_idx.ok_or(Error::BadHandle)?;
-
-        if file_info.dirty {
+    
+        // If we didn't find the file, return an error
+        let file_idx = found_idx.ok_or(Error::BadHandle)?;
+    
+        // Now that we know the file index, and whether it's dirty,
+        // we can perform operations that require mutable borrowing.
+        if is_dirty {
+            // Temporarily remove the file_info from the vector to bypass the borrowing rules
+            let file_info = self.open_files.swap_remove(file_idx);
+    
+            // You would perform your operations that require mutable access here
             let volume_idx = self.get_volume_by_id(file_info.volume_id)?;
             match self.open_volumes[volume_idx].volume_type {
                 VolumeType::Fat(ref mut fat) => {
                     debug!("Updating FAT info sector");
-                    fat.update_info_sector(&self.block_device)?;
+                    fat.update_info_sector(&mut self.block_device)?;
                     debug!("Updating dir entry {:?}", file_info.entry);
                     if file_info.entry.size != 0 {
                         // If you have a length, you must have a cluster
@@ -793,11 +804,21 @@ where
                     self.write_entry_to_disk(fat_type, &file_info.entry)?;
                 }
             };
+    
+            // If the file was not at the last index, we need to update the file_info for the file
+            // that was swapped into its place to have the correct index.
+            if file_idx < self.open_files.len() {
+                // The swap might have moved a different file_info to the `file_idx` position
+                // which now has an incorrect index, you will need to handle this if necessary.
+            }
+        } else {
+            // If the file is not dirty, we can just remove it
+            self.open_files.swap_remove(file_idx);
         }
-
-        self.open_files.swap_remove(file_idx);
+    
         Ok(())
     }
+    
 
     /// Check if any files or folders are open.
     pub fn has_open_handles(&self) -> bool {
@@ -897,7 +918,7 @@ where
     /// read. It either calculates this based on the start of the file, or
     /// from the last cluster we read - whichever is better.
     fn find_data_on_disk(
-        &self,
+        &mut self,
         volume_idx: usize,
         start: &mut (u32, ClusterId),
         desired_offset: u32,
@@ -912,7 +933,7 @@ where
         for _ in 0..num_clusters {
             start.1 = match &self.open_volumes[volume_idx].volume_type {
                 VolumeType::Fat(fat) => {
-                    fat.next_cluster(&self.block_device, start.1, &mut block_cache)?
+                    fat.next_cluster(&mut self.block_device, start.1, &mut block_cache)?
                 }
             };
             start.0 += bytes_per_cluster;
@@ -931,7 +952,7 @@ where
 
     /// Writes a Directory Entry to the disk
     fn write_entry_to_disk(
-        &self,
+        &mut self,
         fat_type: fat::FatType,
         entry: &DirEntry,
     ) -> Result<(), Error<D::Error>> {
@@ -1011,7 +1032,7 @@ mod tests {
 
         /// Read one or more blocks, starting at the given block index.
         fn read(
-            &self,
+            &mut self,
             blocks: &mut [Block],
             start_block_idx: BlockIdx,
             _reason: &str,
@@ -1208,7 +1229,7 @@ mod tests {
         }
 
         /// Write one or more blocks, starting at the given block index.
-        fn write(&self, _blocks: &[Block], _start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        fn write(&mut self, _blocks: &[Block], _start_block_idx: BlockIdx) -> Result<(), Self::Error> {
             unimplemented!();
         }
 

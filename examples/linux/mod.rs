@@ -35,7 +35,7 @@ impl BlockDevice for LinuxBlockDevice {
     type Error = std::io::Error;
 
     fn read(
-        &self,
+        &mut self,
         blocks: &mut [Block],
         start_block_idx: BlockIdx,
         reason: &str,
@@ -55,7 +55,7 @@ impl BlockDevice for LinuxBlockDevice {
         Ok(())
     }
 
-    fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+    fn write(&mut self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
         self.file
             .borrow_mut()
             .seek(SeekFrom::Start(start_block_idx.into_bytes()))?;
