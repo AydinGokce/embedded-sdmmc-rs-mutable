@@ -5,6 +5,8 @@
 use byteorder::{ByteOrder, LittleEndian};
 use core::convert::TryFrom;
 
+use log::*;
+
 use crate::fat::{self, BlockCache, RESERVED_ENTRIES};
 
 use crate::filesystem::{
@@ -146,6 +148,7 @@ where
             // We only support Master Boot Record (MBR) partitioned cards, not
             // GUID Partition Table (GPT)
             if LittleEndian::read_u16(&block[FOOTER_START..FOOTER_START + 2]) != FOOTER_VALUE {
+                info!("observed footer: 510 {} 511 {}", block[510], block[511]);
                 return Err(Error::FormatError("Invalid MBR signature"));
             }
             let partition = match volume_idx {
