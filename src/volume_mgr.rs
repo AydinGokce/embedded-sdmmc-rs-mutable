@@ -97,6 +97,11 @@ where
         &mut self.block_device
     }
 
+    /// Temporarily get access to the underlying time source.
+    pub fn timesource(&mut self) -> &mut T {
+        self.time_source
+    }
+
     /// Get a volume (or partition) based on entries in the Master Boot Record.
     ///
     /// We do not support GUID Partition Table disks. Nor do we support any
