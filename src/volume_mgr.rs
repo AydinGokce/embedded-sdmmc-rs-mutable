@@ -98,8 +98,8 @@ where
     }
 
     /// Temporarily get access to the underlying time source.
-    pub fn timesource(&mut self) -> &mut T {
-        self.time_source
+    pub fn timesource(&self) -> & T {
+        &self.time_source
     }
 
     /// Get a volume (or partition) based on entries in the Master Boot Record.
